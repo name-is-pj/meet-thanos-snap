@@ -1,4 +1,6 @@
-# Thanos Snap for Google Meet — v1.0.1
+# Thanos Snap for Google Meet — v1.0.2
+
+> **v1.0.2 fix:** Meet enforces Trusted Types, so v1.0.0/v1.0.1 crashed at `panel.innerHTML` (your screenshot, thanos.js:179) and the panel never appeared. v1.0.2 builds the panel with DOM APIs only — no innerHTML anywhere — so it should now appear after a Meet reload.
 
 > **If it did nothing in v1.0.0, read this first:** Chrome does NOT
 > inject an extension into a tab that was already open when you installed

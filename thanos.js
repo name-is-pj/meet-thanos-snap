@@ -1,4 +1,9 @@
 /* Thanos Snap for Google Meet — v1.0.1
+ * v1.0.2 FIX (below, in buildPanel): Meet enforces Trusted Types, so
+ * setting innerHTML in the page (MAIN) world throws "This document
+ * requires TrustedHTML assignment" and the panel never builds. v1.0.2
+ * builds the panel with createElement/textContent/style properties
+ * only — no innerHTML, no cssText, anywhere.
  *
  * v1.0.1 FIX — why v1.0.0 silently did nothing in PJ's test video:
  * - v1.0.0 only installed the camera interceptor on DOMContentLoaded.
@@ -175,46 +180,94 @@
     if (document.getElementById('thanos-snap-panel')) return;
     panel = document.createElement('div');
     panel.id = 'thanos-snap-panel';
-    panel.style.cssText = 'position:fixed;right:16px;bottom:96px;z-index:2147483647;width:268px;background:rgba(18,18,28,0.94);color:#fff;border:1px solid rgba(255,255,255,0.18);border-radius:14px;padding:12px 14px;font-family:system-ui,Arial,sans-serif;font-size:13px;line-height:1.4;box-shadow:0 8px 30px rgba(0,0,0,0.45);';
-    panel.innerHTML =
-      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">' +
-        '<b>✨ Thanos Snap v1.0.1</b>' +
-        '<button id="thanos-min" style="background:none;border:1px solid rgba(255,255,255,0.3);color:#fff;border-radius:8px;padding:2px 8px;cursor:pointer;">–</button>' +
-      '</div>' +
-      '<div id="thanos-body">' +
-        '<div>Status: <span id="thanos-status" style="color:#7CFC9A;">● Visible, mic live</span></div>' +
-        '<div id="thanos-hook" style="font-size:11px;color:#ffd479;margin-top:2px;">○ Waiting for camera…</div>' +
-        '<div style="margin:8px 0 2px;">Snap sensitivity</div>' +
-        '<input id="thanos-sens" type="range" min="0.3" max="0.95" step="0.05" style="width:100%;">' +
-        '<div style="font-size:11px;color:#ccc;">Higher = easier to trigger. Lower it if speech triggers it.</div>' +
-        '<label style="display:flex;gap:6px;align-items:center;margin-top:8px;"><input id="thanos-on" type="checkbox"> Snap detection on</label>' +
-        '<button id="thanos-test" style="width:100%;margin-top:10px;padding:8px;border:0;border-radius:9px;background:#7c4dff;color:#fff;font-weight:600;cursor:pointer;">Test dust (simulates a snap)</button>' +
-        '<div style="font-size:11px;color:#ccc;margin-top:8px;">If it says NOT HOOKED, reload this Meet tab and rejoin — Chrome does not inject extensions into a tab that was already open when you installed it. Snap near your mic. Snap again while dusted to come back.</div>' +
-      '</div>';
+    panel.style.position = 'fixed'; panel.style.right = '16px'; panel.style.bottom = '96px';
+    panel.style.zIndex = '2147483647'; panel.style.width = '268px';
+    panel.style.background = 'rgba(18,18,28,0.94)'; panel.style.color = '#fff';
+    panel.style.border = '1px solid rgba(255,255,255,0.18)'; panel.style.borderRadius = '14px';
+    panel.style.padding = '12px 14px'; panel.style.fontFamily = 'system-ui,Arial,sans-serif';
+    panel.style.fontSize = '13px'; panel.style.lineHeight = '1.4';
+    panel.style.boxShadow = '0 8px 30px rgba(0,0,0,0.45)';
+    // Meet enforces Trusted Types: NEVER use innerHTML here. DOM APIs only.
+    var header = document.createElement('div');
+    header.style.display = 'flex'; header.style.justifyContent = 'space-between';
+    header.style.alignItems = 'center'; header.style.marginBottom = '6px';
+    var titleEl = document.createElement('b');
+    titleEl.textContent = '✨ Thanos Snap v1.0.2';
+    header.appendChild(titleEl);
+    var minBtn = document.createElement('button');
+    minBtn.textContent = '–';
+    minBtn.style.background = 'none'; minBtn.style.border = '1px solid rgba(255,255,255,0.3)';
+    minBtn.style.color = '#fff'; minBtn.style.borderRadius = '8px';
+    minBtn.style.padding = '2px 8px'; minBtn.style.cursor = 'pointer';
+    header.appendChild(minBtn);
+    panel.appendChild(header);
+    var bodyDiv = document.createElement('div');
+    panel.appendChild(bodyDiv);
+    var statusRow = document.createElement('div');
+    statusRow.appendChild(document.createTextNode('Status: '));
+    statusEl = document.createElement('span');
+    statusEl.textContent = '● Visible, mic live'; statusEl.style.color = '#7CFC9A';
+    statusRow.appendChild(statusEl);
+    bodyDiv.appendChild(statusRow);
+    hookEl = document.createElement('div');
+    hookEl.textContent = '○ Waiting for camera…';
+    hookEl.style.fontSize = '11px'; hookEl.style.color = '#ffd479'; hookEl.style.marginTop = '2px';
+    bodyDiv.appendChild(hookEl);
+    var sensLabel = document.createElement('div');
+    sensLabel.textContent = 'Snap sensitivity';
+    sensLabel.style.margin = '8px 0 2px';
+    bodyDiv.appendChild(sensLabel);
+    var sens = document.createElement('input');
+    sens.type = 'range'; sens.min = '0.3'; sens.max = '0.95'; sens.step = '0.05';
+    sens.style.width = '100%';
+    bodyDiv.appendChild(sens);
+    var sensNote = document.createElement('div');
+    sensNote.textContent = 'Higher = easier to trigger. Lower it if speech triggers it.';
+    sensNote.style.fontSize = '11px'; sensNote.style.color = '#ccc';
+    bodyDiv.appendChild(sensNote);
+    var onLabel = document.createElement('label');
+    onLabel.style.display = 'flex'; onLabel.style.gap = '6px'; onLabel.style.alignItems = 'center';
+    onLabel.style.marginTop = '8px';
+    var onChk = document.createElement('input');
+    onChk.type = 'checkbox';
+    onLabel.appendChild(onChk);
+    onLabel.appendChild(document.createTextNode(' Snap detection on'));
+    bodyDiv.appendChild(onLabel);
+    var testBtn = document.createElement('button');
+    testBtn.textContent = 'Test dust (simulates a snap)';
+    testBtn.style.width = '100%'; testBtn.style.marginTop = '10px'; testBtn.style.padding = '8px';
+    testBtn.style.border = '0'; testBtn.style.borderRadius = '9px';
+    testBtn.style.background = '#7c4dff'; testBtn.style.color = '#fff'; testBtn.style.fontWeight = '600';
+    testBtn.style.cursor = 'pointer';
+    bodyDiv.appendChild(testBtn);
+    var footNote = document.createElement('div');
+    footNote.textContent = 'If it says NOT HOOKED, reload this Meet tab and rejoin — Chrome does not inject extensions into a tab that was already open when you installed it. Snap near your mic. Snap again while dusted to come back.';
+    footNote.style.fontSize = '11px'; footNote.style.color = '#ccc'; footNote.style.marginTop = '8px';
+    bodyDiv.appendChild(footNote);
     document.body.appendChild(panel);
-    statusEl = document.getElementById('thanos-status');
-    hookEl = document.getElementById('thanos-hook');
     if (hooked) setHooked();
-    var sens = document.getElementById('thanos-sens');
     sens.value = String(settings.sensitivity);
     sens.addEventListener('input', function () { settings.sensitivity = parseFloat(sens.value); saveSettings(); });
-    var on = document.getElementById('thanos-on');
-    on.checked = settings.enabled;
-    on.addEventListener('change', function () { settings.enabled = on.checked; saveSettings(); showToast(settings.enabled ? 'Snap detection on' : 'Snap detection off'); });
-    document.getElementById('thanos-test').addEventListener('click', function () {
+    onChk.checked = settings.enabled;
+    onChk.addEventListener('change', function () { settings.enabled = onChk.checked; saveSettings(); showToast(settings.enabled ? 'Snap detection on' : 'Snap detection off'); });
+    testBtn.addEventListener('click', function () {
       if (!hooked) { showToast('NOT HOOKED yet — reload this Meet tab first, then Test again'); return; }
       onSnapDetected('test button');
     });
-    var body = document.getElementById('thanos-body');
     var collapsed = false;
-    document.getElementById('thanos-min').addEventListener('click', function () {
+    minBtn.addEventListener('click', function () {
       collapsed = !collapsed;
-      body.style.display = collapsed ? 'none' : 'block';
+      bodyDiv.style.display = collapsed ? 'none' : 'block';
       this.textContent = collapsed ? '+' : '–';
     });
 
     toastEl = document.createElement('div');
-    toastEl.style.cssText = 'position:fixed;left:50%;top:18px;transform:translateX(-50%);z-index:2147483647;background:rgba(18,18,28,0.94);color:#fff;padding:10px 16px;border-radius:999px;font-family:system-ui,Arial,sans-serif;font-size:14px;opacity:0;transition:opacity 0.25s;pointer-events:none;';
+    toastEl.style.position = 'fixed'; toastEl.style.left = '50%'; toastEl.style.top = '18px';
+    toastEl.style.transform = 'translateX(-50%)'; toastEl.style.zIndex = '2147483647';
+    toastEl.style.background = 'rgba(18,18,28,0.94)'; toastEl.style.color = '#fff';
+    toastEl.style.padding = '10px 16px'; toastEl.style.borderRadius = '999px';
+    toastEl.style.fontFamily = 'system-ui,Arial,sans-serif'; toastEl.style.fontSize = '14px';
+    toastEl.style.opacity = '0'; toastEl.style.transition = 'opacity 0.25s'; toastEl.style.pointerEvents = 'none';
     document.body.appendChild(toastEl);
   }
 
