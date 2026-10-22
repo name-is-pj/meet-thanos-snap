@@ -1,4 +1,16 @@
-/* Thanos Snap for Google Meet — v1.0.0
+/* Thanos Snap for Google Meet — v1.0.1
+ *
+ * v1.0.1 FIX — why v1.0.0 silently did nothing in PJ's test video:
+ * - v1.0.0 only installed the camera interceptor on DOMContentLoaded.
+ *   Meet can grab the camera before that, so it kept the raw track and
+ *   the canvas/dust pipeline never saw a frame. The panel also gave no
+ *   sign of this, so it just looked dead.
+ * - v1.0.1 installs the interceptor IMMEDIATELY (document_start), and
+ *   the panel now shows HOOKED vs NOT HOOKED in plain text. If it says
+ *   NOT HOOKED, the tab was already in Meet when the extension was
+ *   installed — Chrome does NOT inject content scripts into already-open
+ *   tabs — and the only fix is to reload the Meet tab and rejoin.
+ * - The rest of the design is unchanged (see v1.0.0 notes below).
  *
  * How it works (important, read before debugging):
  * 1. This script runs in the page itself (world: MAIN) so it can intercept
@@ -44,6 +56,13 @@
   var mode = 'live'; // live | dusting | gone | returning
   var lastSnapAt = 0;
   var snapCount = 0;
+  var hooked = false; // true once Meet's camera actually went through the canvas
+  var hookEl = null;
+  function setHooked() {
+    hooked = true;
+    if (hookEl) { hookEl.textContent = '● HOOKED — Meet video is going through the dust canvas'; hookEl.style.color = '#7CFC9A'; }
+    if (statusEl) { statusEl.textContent = '● Visible, mic live'; statusEl.style.color = '#7CFC9A'; }
+  }
 
   // ---------- video processor (shared canvas) ----------
   var canvas = document.createElement('canvas');
@@ -152,33 +171,40 @@
   }
 
   function buildPanel() {
+    if (!document.body) return;
     if (document.getElementById('thanos-snap-panel')) return;
     panel = document.createElement('div');
     panel.id = 'thanos-snap-panel';
-    panel.style.cssText = 'position:fixed;right:16px;bottom:96px;z-index:2147483647;width:248px;background:rgba(18,18,28,0.94);color:#fff;border:1px solid rgba(255,255,255,0.18);border-radius:14px;padding:12px 14px;font-family:system-ui,Arial,sans-serif;font-size:13px;line-height:1.4;box-shadow:0 8px 30px rgba(0,0,0,0.45);';
+    panel.style.cssText = 'position:fixed;right:16px;bottom:96px;z-index:2147483647;width:268px;background:rgba(18,18,28,0.94);color:#fff;border:1px solid rgba(255,255,255,0.18);border-radius:14px;padding:12px 14px;font-family:system-ui,Arial,sans-serif;font-size:13px;line-height:1.4;box-shadow:0 8px 30px rgba(0,0,0,0.45);';
     panel.innerHTML =
       '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">' +
-        '<b>✨ Thanos Snap</b>' +
+        '<b>✨ Thanos Snap v1.0.1</b>' +
         '<button id="thanos-min" style="background:none;border:1px solid rgba(255,255,255,0.3);color:#fff;border-radius:8px;padding:2px 8px;cursor:pointer;">–</button>' +
       '</div>' +
       '<div id="thanos-body">' +
         '<div>Status: <span id="thanos-status" style="color:#7CFC9A;">● Visible, mic live</span></div>' +
+        '<div id="thanos-hook" style="font-size:11px;color:#ffd479;margin-top:2px;">○ Waiting for camera…</div>' +
         '<div style="margin:8px 0 2px;">Snap sensitivity</div>' +
         '<input id="thanos-sens" type="range" min="0.3" max="0.95" step="0.05" style="width:100%;">' +
         '<div style="font-size:11px;color:#ccc;">Higher = easier to trigger. Lower it if speech triggers it.</div>' +
         '<label style="display:flex;gap:6px;align-items:center;margin-top:8px;"><input id="thanos-on" type="checkbox"> Snap detection on</label>' +
         '<button id="thanos-test" style="width:100%;margin-top:10px;padding:8px;border:0;border-radius:9px;background:#7c4dff;color:#fff;font-weight:600;cursor:pointer;">Test dust (simulates a snap)</button>' +
-        '<div style="font-size:11px;color:#ccc;margin-top:8px;">Snap near your mic. Snap again while dusted to come back. Detection listens to your real mic, so it still hears you while Meet is muted.</div>' +
+        '<div style="font-size:11px;color:#ccc;margin-top:8px;">If it says NOT HOOKED, reload this Meet tab and rejoin — Chrome does not inject extensions into a tab that was already open when you installed it. Snap near your mic. Snap again while dusted to come back.</div>' +
       '</div>';
     document.body.appendChild(panel);
     statusEl = document.getElementById('thanos-status');
+    hookEl = document.getElementById('thanos-hook');
+    if (hooked) setHooked();
     var sens = document.getElementById('thanos-sens');
     sens.value = String(settings.sensitivity);
     sens.addEventListener('input', function () { settings.sensitivity = parseFloat(sens.value); saveSettings(); });
     var on = document.getElementById('thanos-on');
     on.checked = settings.enabled;
     on.addEventListener('change', function () { settings.enabled = on.checked; saveSettings(); showToast(settings.enabled ? 'Snap detection on' : 'Snap detection off'); });
-    document.getElementById('thanos-test').addEventListener('click', function () { onSnapDetected('test button'); });
+    document.getElementById('thanos-test').addEventListener('click', function () {
+      if (!hooked) { showToast('NOT HOOKED yet — reload this Meet tab first, then Test again'); return; }
+      onSnapDetected('test button');
+    });
     var body = document.getElementById('thanos-body');
     var collapsed = false;
     document.getElementById('thanos-min').addEventListener('click', function () {
@@ -325,8 +351,10 @@
   // ---------- intercept getUserMedia ----------
   function installInterceptor() {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
+    if (navigator.mediaDevices.__thanosHooked) return;
+    navigator.mediaDevices.__thanosHooked = true;
     var origGetUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
-    navigator.mediaDevices.getUserMedia = async function (constraints) {
+    var wrapped = async function (constraints) {
       var stream = await origGetUserMedia(constraints);
       var hasVideo = !!(constraints && constraints.video);
       var hasAudio = !!(constraints && constraints.audio);
@@ -342,6 +370,7 @@
           videoEl.srcObject = new MediaStream([vTrack]);
           videoEl.play().catch(function () {});
         } catch (e) {}
+        setHooked();
       }
       if (hasAudio && aTrack) {
         origAudioTrack = aTrack;
@@ -357,20 +386,41 @@
       });
       return new MediaStream(outTracks);
     };
+    navigator.mediaDevices.getUserMedia = wrapped;
+    try {
+      if (window.MediaDevices && window.MediaDevices.prototype) {
+        window.MediaDevices.prototype.getUserMedia = wrapped;
+      }
+    } catch (e) {}
   }
 
+  // v1.0.1: install the interceptor IMMEDIATELY — do NOT wait for
+  // DOMContentLoaded. That wait was the v1.0.0 bug: Meet can grab the
+  // camera before DOMContentLoaded fires.
+  installInterceptor();
+  // Panel needs <body>, so retry it until it exists.
+  buildPanel();
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', function () { buildPanel(); installInterceptor(); });
-  } else {
-    buildPanel(); installInterceptor();
+    document.addEventListener('DOMContentLoaded', buildPanel);
   }
-  // Panel may need body; retry once if it was not there yet.
-  setTimeout(buildPanel, 1500);
+  var panelRetry = setInterval(function () {
+    buildPanel();
+    if (document.getElementById('thanos-snap-panel')) clearInterval(panelRetry);
+  }, 500);
+  setTimeout(function () { clearInterval(panelRetry); }, 15000);
+  // After 6s, if the panel is up but no camera ever went through the
+  // canvas, say so plainly instead of failing silently.
+  setTimeout(function () {
+    if (!hooked && hookEl) {
+      hookEl.textContent = '✕ NOT HOOKED — reload this Meet tab and rejoin (extension was loaded after the camera started)';
+      hookEl.style.color = '#ff8a8a';
+    }
+  }, 6000);
 
   window.__thanosSnap = {
     testSnap: function () { onSnapDetected('manual'); },
-    status: function () { return { mode: mode, snaps: snapCount, sensitivity: settings.sensitivity }; },
+    status: function () { return { mode: mode, hooked: hooked, snaps: snapCount, sensitivity: settings.sensitivity }; },
     toggle: function () { settings.enabled = !settings.enabled; saveSettings(); return settings.enabled; }
   };
-  console.log('[Thanos Snap] loaded — snap near your mic to dust / return.');
+  console.log('[Thanos Snap v1.0.1] loaded — interceptor installed, waiting for camera.');
 })();

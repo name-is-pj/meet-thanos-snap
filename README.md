@@ -1,4 +1,12 @@
-# Thanos Snap for Google Meet
+# Thanos Snap for Google Meet — v1.0.1
+
+> **If it did nothing in v1.0.0, read this first:** Chrome does NOT
+> inject an extension into a tab that was already open when you installed
+> it, and v1.0.0 also waited until page-load to hook the camera, so Meet
+> kept its raw camera. v1.0.1 hooks the camera immediately and the panel
+> now says HOOKED or NOT HOOKED. **You must reload the Meet tab and
+> rejoin after installing/updating, then check the panel says HOOKED
+> before you snap.** If it says NOT HOOKED after 6 seconds, reload again.
 
 Snap your fingers while you're on camera: you dissolve into dust particles
 and your mic mutes. Snap again: you reassemble and your mic unmutes.
