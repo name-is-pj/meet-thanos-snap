@@ -1,4 +1,13 @@
-/* Thanos Snap for Google Meet — v2.0.0
+/* Thanos Snap for Google Meet — v3.0.0
+ * v3.0.0 — VISUAL SNAP, because audio snap kept missing in PJ's tests:
+ * his laptop mic is far from his fingers, the snap click is quiet, and
+ * screen recordings are silent so we could never hear it anyway.
+ * v3 runs MediaPipe Hands (bundled locally in lib/hands/, no CDN) in an
+ * ISOLATED content script, which watches the camera video for the
+ * actual finger flick: thumb tip + middle tip pressed together, then
+ * apart fast. That is what PJ meant by "capture the moment in the video".
+ * Audio snap is kept as a backup, not the only trigger.
+ *
  * v2.0.0 — what changed from v1.0.3, in plain terms:
  * - PERSON-ONLY DUST: v1 dusted the whole frame to black because it had
  *   no idea where you are vs your background. v2 uses Chrome's built-in
@@ -87,6 +96,7 @@
   var hooked = false; // true once Meet's camera actually went through the canvas
   var hookEl = null;
   var personBox = null; // {x,y,w,h} in canvas coords, from FaceDetector
+  var visualEl = null, audioEl = null, handSeen = false;
   var personEl = null, meterEl = null;
   var faceDetector = null, faceAvailable = false;
   var bgCanvas = document.createElement('canvas');
@@ -289,7 +299,7 @@
     header.style.alignItems = 'center'; header.style.marginBottom = '6px';
     header.style.cursor = 'move';
     var titleEl = document.createElement('b');
-    titleEl.textContent = '✨ Thanos Snap v2.0.0  ⠿ drag me';
+    titleEl.textContent = '✨ Thanos Snap v3.0.0  ⠿ drag me';
     header.appendChild(titleEl);
     var minBtn = document.createElement('button');
     minBtn.textContent = '–';
@@ -322,6 +332,24 @@
     personEl.textContent = faceAvailable ? 'Looking for your face…' : 'Face detection not available in this Chrome — dust will be whole-frame';
     personEl.style.fontSize = '11px'; personEl.style.color = '#ccc'; personEl.style.marginTop = '2px';
     bodyDiv.appendChild(personEl);
+    visualEl = document.createElement('div');
+    visualEl.textContent = 'Hand tracking loading… (visual snap, no sound needed)';
+    visualEl.style.fontSize = '11px'; visualEl.style.color = '#c9a7ff'; visualEl.style.marginTop = '2px';
+    bodyDiv.appendChild(visualEl);
+    audioEl = document.createElement('div');
+    audioEl.textContent = 'Audio snap: backup only';
+    audioEl.style.fontSize = '11px'; audioEl.style.color = '#ccc'; audioEl.style.marginTop = '2px';
+    bodyDiv.appendChild(audioEl);
+    var enableBtn = document.createElement('button');
+    enableBtn.textContent = 'Enable mic listening (click once if audio meter stays at 0)';
+    enableBtn.style.width = '100%'; enableBtn.style.marginTop = '6px'; enableBtn.style.padding = '6px';
+    enableBtn.style.border = '1px solid rgba(255,255,255,0.3)'; enableBtn.style.borderRadius = '9px';
+    enableBtn.style.background = 'transparent'; enableBtn.style.color = '#fff'; enableBtn.style.cursor = 'pointer'; enableBtn.style.fontSize = '12px';
+    bodyDiv.appendChild(enableBtn);
+    enableBtn.addEventListener('click', function () {
+      if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+      showToast('Mic listening enabled — snap now, or watch for hand flick');
+    });
     var meterLabel = document.createElement('div');
     meterLabel.textContent = 'Mic level — a snap should spike this bar';
     meterLabel.style.margin = '8px 0 2px'; meterLabel.style.fontSize = '11px';
@@ -540,6 +568,10 @@
       var hiRatio = tot > 0 ? hi / tot : 0;
       var prevAvg = rmsHistory.length ? rmsHistory.reduce(function (a, b) { return a + b; }, 0) / rmsHistory.length : 0;
       if (meterEl) meterEl.style.width = Math.min(100, Math.round(peak * 100)) + '%';
+      if (audioEl && audioCtx && (!detectorTick._lastAudio || Date.now() - detectorTick._lastAudio > 1000)) {
+        detectorTick._lastAudio = Date.now();
+        audioEl.textContent = 'Audio snap: backup only — AudioContext ' + audioCtx.state + ', last peak ' + peak.toFixed(2);
+      }
       if (peak > peakThreshold() && prevAvg < 0.25 && hiRatio > 0.12) {
         onSnapDetected('audio snap');
       }
@@ -585,6 +617,21 @@
   initFaceDetector();
   faceTick();
 
+  // ---------- visual snap events from isolated hand tracker ----------
+  window.addEventListener('thanos-visual-snap', function () {
+    onSnapDetected('visual snap');
+  });
+  window.addEventListener('thanos-hand-status', function (ev) {
+    var d = (ev && ev.detail) || {};
+    handSeen = !!d.seen;
+    if (visualEl) {
+      if (d.error) visualEl.textContent = 'Hand tracking error: ' + d.error;
+      else if (!d.ready) visualEl.textContent = 'Hand tracking loading…';
+      else if (d.seen) visualEl.textContent = 'Hand seen in video — snap flick will trigger (thumb-middle: ' + d.ratio + ')';
+      else visualEl.textContent = 'Hand not seen — raise your hand into frame, then snap';
+    }
+  });
+
   // ---------- intercept getUserMedia ----------
   function installInterceptor() {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
@@ -604,8 +651,16 @@
       }
       if (hasVideo && vTrack) {
         try {
+          videoEl.id = 'thanos-source-video';
           videoEl.srcObject = new MediaStream([vTrack]);
           videoEl.play().catch(function () {});
+          // Shared DOM: isolated hand tracker finds this by id.
+          if (!videoEl.parentNode && document.body) {
+            videoEl.style.position = 'fixed'; videoEl.style.left = '0px'; videoEl.style.top = '0px';
+            videoEl.style.width = '160px'; videoEl.style.height = '90px'; videoEl.style.opacity = '0.01';
+            videoEl.style.pointerEvents = 'none'; videoEl.style.zIndex = '-1';
+            document.body.appendChild(videoEl);
+          }
         } catch (e) {}
         setHooked();
       }
@@ -659,5 +714,5 @@
     status: function () { return { mode: mode, hooked: hooked, snaps: snapCount, sensitivity: settings.sensitivity }; },
     toggle: function () { settings.enabled = !settings.enabled; saveSettings(); return settings.enabled; }
   };
-  console.log('[Thanos Snap v2.0.0] loaded — interceptor installed, waiting for camera.');
+  console.log('[Thanos Snap v3.0.0] loaded — interceptor installed, waiting for camera.');
 })();

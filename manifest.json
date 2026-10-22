@@ -1,15 +1,26 @@
 {
   "content_scripts": [
     {
-      "all_frames": false,
-      "js": [
-        "thanos.js"
-      ],
       "matches": [
         "https://meet.google.com/*"
       ],
+      "js": [
+        "thanos.js"
+      ],
       "run_at": "document_start",
-      "world": "MAIN"
+      "world": "MAIN",
+      "all_frames": false
+    },
+    {
+      "matches": [
+        "https://meet.google.com/*"
+      ],
+      "js": [
+        "lib/hands/hands.js",
+        "thanos-hand.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": false
     }
   ],
   "description": "Snap your fingers on camera: you dissolve into dust and your mic mutes. Snap again: you reassemble and unmute.",
@@ -19,5 +30,15 @@
   "manifest_version": 3,
   "name": "Thanos Snap for Google Meet",
   "permissions": [],
-  "version": "2.0.0"
+  "version": "3.0.0",
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "lib/hands/*"
+      ],
+      "matches": [
+        "https://meet.google.com/*"
+      ]
+    }
+  ]
 }

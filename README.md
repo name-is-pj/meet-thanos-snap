@@ -1,4 +1,7 @@
-# Thanos Snap for Google Meet — v2.0.0
+# Thanos Snap for Google Meet — v3.0.0
+
+> **v3.0.0:** Visual snap via MediaPipe Hands (bundled locally, no CDN). It watches the video for the thumb+middle finger flick — pressed together, then apart fast — so a quiet snap near a far laptop mic still triggers. Audio snap is kept as backup only. Panel shows hand status live.
+
 
 > **v2.0.0:** Person-only dust (Chrome FaceDetector finds you, only your box becomes dust, background stays), snap detection is automatic — **Test dust is manual only, you never need to click it** — and the panel is draggable by its title bar, with X to hide it to a small floating ✨ button.
 
