@@ -1,2 +1,87 @@
-# meet-thanos-snap
-Thanos Snap for Google Meet: snap to dissolve into dust and mute, snap again to return and unmute.
+# Thanos Snap for Google Meet
+
+Snap your fingers while you're on camera: you dissolve into dust particles
+and your mic mutes. Snap again: you reassemble and your mic unmutes.
+
+## Install (Chrome, unpacked)
+
+1. Open `chrome://extensions`
+2. Turn on **Developer mode** (top right).
+3. Click **Load unpacked** and select this folder (`meet-thanos-snap`).
+4. Join a Google Meet. Allow camera + mic when asked.
+5. A small **✨ Thanos Snap** panel appears bottom-right in Meet.
+
+Note: the extension must be loaded *before* you join / before Meet asks
+for the camera. If you install it mid-call, leave and rejoin the Meet so
+it can intercept the camera stream from the start.
+
+## How to use
+
+- **Snap once** near your mic, hand in frame if you want the joke to land.
+  You dissolve into dust over ~1.4 seconds, then your tile goes black,
+  and Meet shows you muted.
+- **Snap again** while dusted. Particles fly back together, then your
+  video and mic come back.
+- Use **Test dust** in the panel if you want to check the animation
+  without snapping.
+- **Snap sensitivity** slider in the panel: slide right if snaps are
+  missed, slide left if normal speech ("p", "t" sounds) triggers it
+  by accident.
+
+## How the second snap works while you're muted
+
+This is the tricky part, and it's handled on purpose:
+
+- Meet never hears your raw mic. It hears a *clone* of your mic track.
+  When you dust, that clone is muted (and Meet's own mute button is
+  clicked, so the Meet UI agrees).
+- Snap detection listens to your *original* mic track, which is never
+  muted. So the second snap is still heard even though Meet hears
+  silence.
+
+## What other people see
+
+- During the snap: your video breaks into dust particles and fades.
+- While you're gone: a black tile (Meet has no "transparent person"
+  video — black is the disappeared state).
+- On return: particles converge back into your live video.
+
+Your own Meet preview shows the same effect, because Meet's preview
+uses the same processed stream.
+
+## Limitations — read this before your first live test
+
+- **This is audio snap detection, not hand tracking.** The trigger is
+  the *sound* of a finger snap. A completely silent hand gesture won't
+  trigger it. A real snap always clicks, and audio is far more reliable
+  than video hand-tracking in a Meet call.
+- **Not live-tested on a real Meet call from this machine** (no camera /
+  Meet session here). The code is syntax-checked and packaged, but your
+  first real call is the real test. If a snap is missed, raise the
+  sensitivity; if speech triggers it, lower it.
+- If Meet changes its mute-button labels, the UI click may miss, but
+  the clone-track mute fallback still mutes you in Meet.
+- Works on `meet.google.com` in Chrome only. It does not work in the
+  Meet mobile app.
+- Loud environments and quiet snaps fight each other: snap close to
+  the mic, clearly, with a short pause before and after.
+
+## Files
+
+- `manifest.json` — Manifest V3, runs only on meet.google.com.
+- `thanos.js` — everything: camera interception, dust animation,
+  snap detection, mute/unmute, and the control panel.
+
+## Troubleshooting
+
+- **No panel / no effect:** reload Meet after loading the extension,
+  and make sure you loaded the folder, not the ZIP.
+- **Video black from the start:** the extension probably loaded after
+  Meet already grabbed the camera. Leave and rejoin.
+- **Snap not detected:** raise sensitivity, snap louder and closer to
+  the mic, and check Chrome didn't block mic access.
+- **Speech triggers it:** lower sensitivity.
+- **Second snap doesn't bring you back:** use the panel's Test button
+  to check the return animation, then try a louder, isolated snap.
+  The detector needs a short quiet moment before the snap, so don't
+  snap mid-sentence.
