@@ -1,4 +1,23 @@
-/* Thanos Snap for Google Meet — v1.0.3
+/* Thanos Snap for Google Meet — v2.0.0
+ * v2.0.0 — what changed from v1.0.3, in plain terms:
+ * - PERSON-ONLY DUST: v1 dusted the whole frame to black because it had
+ *   no idea where you are vs your background. v2 uses Chrome's built-in
+ *   FaceDetector (no download, no external model) to find your face,
+ *   expands that box to cover your torso, and only those pixels become
+ *   dust. Everything outside that box stays as your background. When
+ *   you are gone, the panel shows the background with the person area
+ *   filled from the wall colour around you — on a plain wall this looks
+ *   like you simply vanished. If FaceDetector is unavailable in your
+ *   Chrome, it falls back to the old whole-frame dust and says so.
+ * - SNAP IS AUTOMATIC, TEST BUTTON IS NOT REQUIRED: 'Test dust' was
+ *   only ever a manual test button. You never need to click it in a
+ *   real call — just snap. v2 also lowers the snap threshold, relaxes
+ *   the quiet-before-snap rule, and adds a live mic meter so you can
+ *   SEE whether a snap registers before you trust it.
+ * - MOVABLE PANEL: drag the panel by its title bar to anywhere, and
+ *   use X to hide it completely (a small floating button brings it
+ *   back). The minimised bar is no longer stuck in one corner.
+ *
  * v1.0.3: no code change from v1.0.2 except version markers everywhere
  * (manifest, panel title, console) — so you can prove Chrome actually
  * reloaded the new code. If the Extensions card still says 1.0.1, Chrome
@@ -48,7 +67,7 @@
   window.__thanosSnapInstalled = true;
 
   var SETTINGS_KEY = 'thanosSnapSettings';
-  var settings = { enabled: true, sensitivity: 0.65, dustMs: 1400 };
+  var settings = { enabled: true, sensitivity: 0.80, dustMs: 1400 };
   try {
     var saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
     if (typeof saved.enabled === 'boolean') settings.enabled = saved.enabled;
@@ -67,6 +86,10 @@
   var snapCount = 0;
   var hooked = false; // true once Meet's camera actually went through the canvas
   var hookEl = null;
+  var personBox = null; // {x,y,w,h} in canvas coords, from FaceDetector
+  var personEl = null, meterEl = null;
+  var faceDetector = null, faceAvailable = false;
+  var bgCanvas = document.createElement('canvas');
   function setHooked() {
     hooked = true;
     if (hookEl) { hookEl.textContent = '● HOOKED — Meet video is going through the dust canvas'; hookEl.style.color = '#7CFC9A'; }
@@ -110,6 +133,7 @@
         if (a < 20) continue; // skip near-transparent pixels
         var px = (x / sw) * canvas.width;
         var py = (y / sh) * canvas.height;
+        if (personBox && (px < personBox.x || px > personBox.x + personBox.w || py < personBox.y || py > personBox.y + personBox.h)) continue;
         if (scattered) {
           particles.push({
             tx: px, ty: py,
@@ -138,6 +162,38 @@
     var sctx = snapshotCanvas.getContext('2d');
     try { sctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height); }
     catch (e) { sctx.drawImage(canvas, 0, 0); }
+    // Background-only canvas: full frame, but the person box filled with
+    // the average colour sampled from just outside the box. On a plain
+    // wall this is almost indistinguishable from the real background.
+    bgCanvas.width = canvas.width; bgCanvas.height = canvas.height;
+    var bctx = bgCanvas.getContext('2d');
+    bctx.drawImage(snapshotCanvas, 0, 0);
+    if (personBox) {
+      try {
+        var img = sctx.getImageData(0, 0, snapshotCanvas.width, snapshotCanvas.height).data;
+        var r = 0, g = 0, b = 0, n = 0;
+        var bx = Math.round(personBox.x), by = Math.round(personBox.y);
+        var bw = Math.round(personBox.w), bh = Math.round(personBox.h);
+        for (var yy = Math.max(0, by - 30); yy < Math.min(snapshotCanvas.height, by + bh + 30); yy += 4) {
+          for (var xx = Math.max(0, bx - 30); xx < Math.min(snapshotCanvas.width, bx + bw + 30); xx += 4) {
+            var inside = xx >= bx && xx < bx + bw && yy >= by && yy < by + bh;
+            if (inside) continue;
+            var idx = (yy * snapshotCanvas.width + xx) * 4;
+            r += img[idx]; g += img[idx + 1]; b += img[idx + 2]; n++;
+          }
+        }
+        if (n > 0) {
+          bctx.fillStyle = 'rgb(' + Math.round(r / n) + ',' + Math.round(g / n) + ',' + Math.round(b / n) + ')';
+          bctx.fillRect(personBox.x, personBox.y, personBox.w, personBox.h);
+        }
+      } catch (e) {}
+    } else {
+      bctx.fillStyle = '#000'; bctx.fillRect(0, 0, canvas.width, canvas.height);
+      // Fallback (no face box): bg is black, i.e. old whole-frame behaviour.
+      // To keep the fallback simple, draw the snapshot over black and let
+      // dusting fade it — handled in render by the personBox check.
+      bctx.drawImage(snapshotCanvas, 0, 0);
+    }
   }
 
   // ---------- Meet mute / unmute ----------
@@ -179,6 +235,42 @@
     showToast._t = setTimeout(function () { toastEl.style.opacity = '0'; }, 2200);
   }
 
+  // Drag helper: drag by a handle, ignore clicks on buttons inside it.
+  var floatBtn = null;
+  function makeDraggable(handle, target, saveKey) {
+    handle.addEventListener('mousedown', function (e) {
+      if (e.target && e.target.tagName === 'BUTTON' && e.target !== handle) return;
+      e.preventDefault();
+      var startX = e.clientX, startY = e.clientY;
+      var rect = target.getBoundingClientRect();
+      var moved = false;
+      function onMove(ev) {
+        if (Math.abs(ev.clientX - startX) > 3 || Math.abs(ev.clientY - startY) > 3) moved = true;
+        target.style.left = (rect.left + ev.clientX - startX) + 'px';
+        target.style.top = (rect.top + ev.clientY - startY) + 'px';
+        target.style.right = 'auto'; target.style.bottom = 'auto';
+      }
+      function onUp() {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        if (saveKey) { try { localStorage.setItem(saveKey, JSON.stringify({ left: target.style.left, top: target.style.top })); } catch (err) {} }
+        target._dragged = moved;
+        setTimeout(function () { target._dragged = false; }, 0);
+      }
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+  }
+  function restorePos(target, key) {
+    try {
+      var saved = JSON.parse(localStorage.getItem(key) || 'null');
+      if (saved && saved.left && saved.top) {
+        target.style.left = saved.left; target.style.top = saved.top;
+        target.style.right = 'auto'; target.style.bottom = 'auto';
+      }
+    } catch (e) {}
+  }
+
   function buildPanel() {
     if (!document.body) return;
     if (document.getElementById('thanos-snap-panel')) return;
@@ -191,20 +283,29 @@
     panel.style.padding = '12px 14px'; panel.style.fontFamily = 'system-ui,Arial,sans-serif';
     panel.style.fontSize = '13px'; panel.style.lineHeight = '1.4';
     panel.style.boxShadow = '0 8px 30px rgba(0,0,0,0.45)';
-    // Meet enforces Trusted Types: NEVER use innerHTML here. DOM APIs only.
+    restorePos(panel, 'thanosSnapPos');
     var header = document.createElement('div');
     header.style.display = 'flex'; header.style.justifyContent = 'space-between';
     header.style.alignItems = 'center'; header.style.marginBottom = '6px';
+    header.style.cursor = 'move';
     var titleEl = document.createElement('b');
-    titleEl.textContent = '✨ Thanos Snap v1.0.3';
+    titleEl.textContent = '✨ Thanos Snap v2.0.0  ⠿ drag me';
     header.appendChild(titleEl);
     var minBtn = document.createElement('button');
     minBtn.textContent = '–';
     minBtn.style.background = 'none'; minBtn.style.border = '1px solid rgba(255,255,255,0.3)';
     minBtn.style.color = '#fff'; minBtn.style.borderRadius = '8px';
-    minBtn.style.padding = '2px 8px'; minBtn.style.cursor = 'pointer';
+    minBtn.style.padding = '2px 8px'; minBtn.style.cursor = 'pointer'; minBtn.style.marginLeft = '6px';
     header.appendChild(minBtn);
+    var hideBtn = document.createElement('button');
+    hideBtn.textContent = '✕';
+    hideBtn.title = 'Hide panel (floating button brings it back)';
+    hideBtn.style.background = 'none'; hideBtn.style.border = '1px solid rgba(255,255,255,0.3)';
+    hideBtn.style.color = '#fff'; hideBtn.style.borderRadius = '8px';
+    hideBtn.style.padding = '2px 8px'; hideBtn.style.cursor = 'pointer'; hideBtn.style.marginLeft = '4px';
+    header.appendChild(hideBtn);
     panel.appendChild(header);
+    makeDraggable(header, panel, 'thanosSnapPos');
     var bodyDiv = document.createElement('div');
     panel.appendChild(bodyDiv);
     var statusRow = document.createElement('div');
@@ -217,6 +318,21 @@
     hookEl.textContent = '○ Waiting for camera…';
     hookEl.style.fontSize = '11px'; hookEl.style.color = '#ffd479'; hookEl.style.marginTop = '2px';
     bodyDiv.appendChild(hookEl);
+    personEl = document.createElement('div');
+    personEl.textContent = faceAvailable ? 'Looking for your face…' : 'Face detection not available in this Chrome — dust will be whole-frame';
+    personEl.style.fontSize = '11px'; personEl.style.color = '#ccc'; personEl.style.marginTop = '2px';
+    bodyDiv.appendChild(personEl);
+    var meterLabel = document.createElement('div');
+    meterLabel.textContent = 'Mic level — a snap should spike this bar';
+    meterLabel.style.margin = '8px 0 2px'; meterLabel.style.fontSize = '11px';
+    bodyDiv.appendChild(meterLabel);
+    var meterBox = document.createElement('div');
+    meterBox.style.height = '8px'; meterBox.style.background = 'rgba(255,255,255,0.15)';
+    meterBox.style.borderRadius = '4px'; meterBox.style.overflow = 'hidden';
+    meterEl = document.createElement('div');
+    meterEl.style.height = '100%'; meterEl.style.width = '0%'; meterEl.style.background = '#7c4dff';
+    meterBox.appendChild(meterEl);
+    bodyDiv.appendChild(meterBox);
     var sensLabel = document.createElement('div');
     sensLabel.textContent = 'Snap sensitivity';
     sensLabel.style.margin = '8px 0 2px';
@@ -226,7 +342,7 @@
     sens.style.width = '100%';
     bodyDiv.appendChild(sens);
     var sensNote = document.createElement('div');
-    sensNote.textContent = 'Higher = easier to trigger. Lower it if speech triggers it.';
+    sensNote.textContent = 'Higher = easier to trigger. If snaps do not trigger, slide right and snap louder, close to the mic.';
     sensNote.style.fontSize = '11px'; sensNote.style.color = '#ccc';
     bodyDiv.appendChild(sensNote);
     var onLabel = document.createElement('label');
@@ -235,17 +351,17 @@
     var onChk = document.createElement('input');
     onChk.type = 'checkbox';
     onLabel.appendChild(onChk);
-    onLabel.appendChild(document.createTextNode(' Snap detection on'));
+    onLabel.appendChild(document.createTextNode(' Snap detection on (automatic)'));
     bodyDiv.appendChild(onLabel);
     var testBtn = document.createElement('button');
-    testBtn.textContent = 'Test dust (simulates a snap)';
+    testBtn.textContent = 'Test dust — manual only, you do NOT need this to snap';
     testBtn.style.width = '100%'; testBtn.style.marginTop = '10px'; testBtn.style.padding = '8px';
     testBtn.style.border = '0'; testBtn.style.borderRadius = '9px';
-    testBtn.style.background = '#7c4dff'; testBtn.style.color = '#fff'; testBtn.style.fontWeight = '600';
-    testBtn.style.cursor = 'pointer';
+    testBtn.style.background = '#444'; testBtn.style.color = '#fff'; testBtn.style.fontWeight = '600';
+    testBtn.style.cursor = 'pointer'; testBtn.style.fontSize = '12px';
     bodyDiv.appendChild(testBtn);
     var footNote = document.createElement('div');
-    footNote.textContent = 'If it says NOT HOOKED, reload this Meet tab and rejoin — Chrome does not inject extensions into a tab that was already open when you installed it. Snap near your mic. Snap again while dusted to come back.';
+    footNote.textContent = 'How it works: just snap — detection is automatic, no click needed. The Test button is only for checking the animation without snapping. Drag the title bar to move this panel. X hides it; the small ✨ button brings it back. Snap again while dusted to come back.';
     footNote.style.fontSize = '11px'; footNote.style.color = '#ccc'; footNote.style.marginTop = '8px';
     bodyDiv.appendChild(footNote);
     document.body.appendChild(panel);
@@ -263,6 +379,26 @@
       collapsed = !collapsed;
       bodyDiv.style.display = collapsed ? 'none' : 'block';
       this.textContent = collapsed ? '+' : '–';
+    });
+    if (!floatBtn) {
+      floatBtn = document.createElement('button');
+      floatBtn.textContent = '✨';
+      floatBtn.title = 'Show Thanos Snap panel';
+      floatBtn.style.position = 'fixed'; floatBtn.style.right = '16px'; floatBtn.style.bottom = '16px';
+      floatBtn.style.zIndex = '2147483647'; floatBtn.style.width = '44px'; floatBtn.style.height = '44px';
+      floatBtn.style.borderRadius = '50%'; floatBtn.style.border = '1px solid rgba(255,255,255,0.3)';
+      floatBtn.style.background = 'rgba(18,18,28,0.94)'; floatBtn.style.color = '#fff';
+      floatBtn.style.fontSize = '20px'; floatBtn.style.cursor = 'pointer'; floatBtn.style.display = 'none';
+      document.body.appendChild(floatBtn);
+      makeDraggable(floatBtn, floatBtn, 'thanosSnapFloatPos');
+      floatBtn.addEventListener('click', function () {
+        if (floatBtn._dragged) return;
+        panel.style.display = 'block'; floatBtn.style.display = 'none';
+      });
+    }
+    hideBtn.addEventListener('click', function () {
+      panel.style.display = 'none';
+      if (floatBtn) floatBtn.style.display = 'block';
     });
 
     toastEl = document.createElement('div');
@@ -317,13 +453,17 @@
       return;
     }
     if (mode === 'gone') {
-      ctx.fillStyle = '#000'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+      if (bgCanvas.width === canvas.width && personBox) ctx.drawImage(bgCanvas, 0, 0);
+      else { ctx.fillStyle = '#000'; ctx.fillRect(0, 0, canvas.width, canvas.height); }
       return;
     }
     if (mode === 'dusting') {
       var p = Math.min(1, (now - animStart) / settings.dustMs);
-      ctx.fillStyle = '#000'; ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.save(); ctx.globalAlpha = Math.max(0, 1 - p);
+      if (bgCanvas.width === canvas.width && personBox) ctx.drawImage(bgCanvas, 0, 0);
+      else { ctx.fillStyle = '#000'; ctx.fillRect(0, 0, canvas.width, canvas.height); }
+      ctx.save();
+      if (personBox) { ctx.beginPath(); ctx.rect(personBox.x, personBox.y, personBox.w, personBox.h); ctx.clip(); }
+      ctx.globalAlpha = Math.max(0, 1 - p);
       ctx.drawImage(snapshotCanvas, 0, 0, canvas.width, canvas.height);
       ctx.restore();
       for (var i = 0; i < particles.length; i++) {
@@ -340,7 +480,13 @@
       var q = Math.min(1, (now - animStart) / 900);
       // ease-out cubic
       var e = 1 - Math.pow(1 - q, 3);
-      ctx.fillStyle = '#000'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+      if (bgCanvas.width === canvas.width && personBox) ctx.drawImage(bgCanvas, 0, 0);
+      else { ctx.fillStyle = '#000'; ctx.fillRect(0, 0, canvas.width, canvas.height); }
+      ctx.save();
+      if (personBox) { ctx.beginPath(); ctx.rect(personBox.x, personBox.y, personBox.w, personBox.h); ctx.clip(); }
+      ctx.globalAlpha = e;
+      ctx.drawImage(snapshotCanvas, 0, 0, canvas.width, canvas.height);
+      ctx.restore();
       for (var j = 0; j < particles.length; j++) {
         var rp = particles[j];
         var x = rp.x + (rp.tx - rp.x) * e;
@@ -393,7 +539,8 @@
       }
       var hiRatio = tot > 0 ? hi / tot : 0;
       var prevAvg = rmsHistory.length ? rmsHistory.reduce(function (a, b) { return a + b; }, 0) / rmsHistory.length : 0;
-      if (peak > peakThreshold() && prevAvg < 0.18 && hiRatio > 0.18) {
+      if (meterEl) meterEl.style.width = Math.min(100, Math.round(peak * 100)) + '%';
+      if (peak > peakThreshold() && prevAvg < 0.25 && hiRatio > 0.12) {
         onSnapDetected('audio snap');
       }
       rmsHistory.push(rms);
@@ -404,6 +551,39 @@
   detectorTick();
   document.addEventListener('click', function () { if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume(); });
   document.addEventListener('keydown', function () { if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume(); });
+
+  // ---------- person finding (Chrome FaceDetector, no download) ----------
+  function initFaceDetector() {
+    try {
+      if (typeof FaceDetector !== 'undefined') {
+        faceDetector = new FaceDetector({ fastMode: true });
+        faceAvailable = true;
+      }
+    } catch (e) { faceAvailable = false; }
+  }
+  function faceTick() {
+    if (faceDetector && mode === 'live' && videoEl.readyState >= 2 && videoEl.videoWidth > 0) {
+      try {
+        faceDetector.detect(videoEl).then(function (faces) {
+          if (faces && faces.length) {
+            var f = faces[0].boundingBox;
+            var sx = canvas.width / videoEl.videoWidth, sy = canvas.height / videoEl.videoHeight;
+            var fx = f.x * sx, fy = f.y * sy, fw = f.width * sx, fh = f.height * sy;
+            personBox = {
+              x: Math.max(0, fx - fw * 0.9),
+              y: Math.max(0, fy - fh * 0.4),
+              w: Math.min(canvas.width - Math.max(0, fx - fw * 0.9), fw * 2.8),
+              h: Math.min(canvas.height - Math.max(0, fy - fh * 0.4), fh * 4.2)
+            };
+            if (personEl) personEl.textContent = 'Person found — dust will be person-only';
+          }
+        }).catch(function () {});
+      } catch (e) {}
+    }
+    setTimeout(faceTick, 400);
+  }
+  initFaceDetector();
+  faceTick();
 
   // ---------- intercept getUserMedia ----------
   function installInterceptor() {
@@ -479,5 +659,5 @@
     status: function () { return { mode: mode, hooked: hooked, snaps: snapCount, sensitivity: settings.sensitivity }; },
     toggle: function () { settings.enabled = !settings.enabled; saveSettings(); return settings.enabled; }
   };
-  console.log('[Thanos Snap v1.0.3] loaded — interceptor installed, waiting for camera.');
+  console.log('[Thanos Snap v2.0.0] loaded — interceptor installed, waiting for camera.');
 })();

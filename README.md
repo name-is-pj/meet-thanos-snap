@@ -1,4 +1,7 @@
-# Thanos Snap for Google Meet — v1.0.3
+# Thanos Snap for Google Meet — v2.0.0
+
+> **v2.0.0:** Person-only dust (Chrome FaceDetector finds you, only your box becomes dust, background stays), snap detection is automatic — **Test dust is manual only, you never need to click it** — and the panel is draggable by its title bar, with X to hide it to a small floating ✨ button.
+
 
 > **How to prove you are on the new code:** after loading, the Extensions card MUST say **1.0.3** and the panel title MUST say **v1.0.3**. If the card still says 1.0.1, Chrome has not reloaded it — click the circular Reload icon on that card, or Remove it and Load unpacked again. Also click **Clear all** on the Errors page first, or old 1.0.1 TrustedHTML errors will stay visible and look like the fix failed.
 
