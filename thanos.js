@@ -1,4 +1,8 @@
-/* Thanos Snap for Google Meet — v1.0.1
+/* Thanos Snap for Google Meet — v1.0.3
+ * v1.0.3: no code change from v1.0.2 except version markers everywhere
+ * (manifest, panel title, console) — so you can prove Chrome actually
+ * reloaded the new code. If the Extensions card still says 1.0.1, Chrome
+ * has NOT reloaded it, no matter what files are on disk.
  * v1.0.2 FIX (below, in buildPanel): Meet enforces Trusted Types, so
  * setting innerHTML in the page (MAIN) world throws "This document
  * requires TrustedHTML assignment" and the panel never builds. v1.0.2
@@ -192,7 +196,7 @@
     header.style.display = 'flex'; header.style.justifyContent = 'space-between';
     header.style.alignItems = 'center'; header.style.marginBottom = '6px';
     var titleEl = document.createElement('b');
-    titleEl.textContent = '✨ Thanos Snap v1.0.2';
+    titleEl.textContent = '✨ Thanos Snap v1.0.3';
     header.appendChild(titleEl);
     var minBtn = document.createElement('button');
     minBtn.textContent = '–';
@@ -475,5 +479,5 @@
     status: function () { return { mode: mode, hooked: hooked, snaps: snapCount, sensitivity: settings.sensitivity }; },
     toggle: function () { settings.enabled = !settings.enabled; saveSettings(); return settings.enabled; }
   };
-  console.log('[Thanos Snap v1.0.1] loaded — interceptor installed, waiting for camera.');
+  console.log('[Thanos Snap v1.0.3] loaded — interceptor installed, waiting for camera.');
 })();
