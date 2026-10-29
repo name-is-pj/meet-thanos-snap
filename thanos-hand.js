@@ -1,4 +1,4 @@
-/* Thanos Hand Tracker — ISOLATED world content script (v4.0.0)
+/* Thanos Hand Tracker — ISOLATED world content script (v4.1.0)
  * v4 adds FOREHEAD TOUCH: raise a hand to your forehead, hold it there,
  * you vanish (background only); raise it again, hold, you come back.
  * Detection: palm centre (avg of landmarks 0,5,9,13,17) in upper-centre
@@ -36,6 +36,7 @@
   var lastSnapAt = 0, lastStatusAt = 0;
   var foreheadHist = []; // {t, x, y}
   var foreheadArmed = true, lastForeheadAt = 0;
+  var framesSent = 0, resultsReceived = 0, videoState = 'no-video', lastSendAt = 0;
 
   function dist(a, b) {
     var dx = a.x - b.x, dy = a.y - b.y;
@@ -43,12 +44,12 @@
   }
 
   function onResults(results) {
-    busy = false;
+    busy = false; resultsReceived++;
     var lm = results && results.multiHandLandmarks && results.multiHandLandmarks[0];
     var now = Date.now();
     if (!lm) {
       history = []; foreheadHist = []; foreheadArmed = true;
-      if (now - lastStatusAt > 1000) { lastStatusAt = now; emit('thanos-hand-status', { seen: false, ratio: null, ready: ready, forehead: false, holdMs: 0 }); }
+      if (now - lastStatusAt > 1000) { lastStatusAt = now; emit('thanos-hand-status', { seen: false, ratio: null, ready: ready, forehead: false, holdMs: 0, frames: framesSent, results: resultsReceived, video: videoState }); }
       return;
     }
     var palmX = (lm[0].x + lm[5].x + lm[9].x + lm[13].x + lm[17].x) / 5;
@@ -80,7 +81,7 @@
     while (history.length && now - history[0].t > 500) history.shift();
     if (now - lastStatusAt > 800) {
       lastStatusAt = now;
-      emit('thanos-hand-status', { seen: true, ratio: Math.round(ratio * 100) / 100, ready: ready, forehead: inForehead, holdMs: holdMs });
+      emit('thanos-hand-status', { seen: true, ratio: Math.round(ratio * 100) / 100, ready: ready, forehead: inForehead, holdMs: holdMs, frames: framesSent, results: resultsReceived, video: videoState });
     }
     if (!handRaised) return;
     if (now - lastSnapAt < 1500) return;
@@ -101,7 +102,7 @@
       hands = new Hands({
         locateFile: function (file) { return chrome.runtime.getURL('lib/hands/' + file); }
       });
-      hands.setOptions({ maxNumHands: 1, modelComplexity: 0, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
+      hands.setOptions({ maxNumHands: 1, modelComplexity: 0, minDetectionConfidence: 0.4, minTrackingConfidence: 0.4 });
       hands.onResults(onResults);
       ready = true;
       emit('thanos-hand-status', { seen: false, ratio: null, ready: true });
@@ -110,11 +111,32 @@
       return;
     }
     // Loop: find the MAIN-world source video in the shared DOM.
+    // v4.1.0: if that video is missing/frozen, fall back to the largest
+    // playing <video> on the page (Meet's own tile). Also unstick 'busy'
+    // if a send never produced a result within 800ms (previously a
+    // single failed send could block the tracker forever).
     (function loop() {
       setTimeout(function () {
+        if (busy && Date.now() - lastSendAt > 800) busy = false;
         var video = document.getElementById('thanos-source-video');
+        if (!video || video.readyState < 2 || video.videoWidth === 0) {
+          var all = document.querySelectorAll('video');
+          var best = null, bestArea = 0;
+          for (var vi = 0; vi < all.length; vi++) {
+            var v = all[vi];
+            if (v.readyState >= 2 && v.videoWidth > 0 && !v.paused) {
+              var area = v.videoWidth * v.videoHeight;
+              if (area > bestArea) { bestArea = area; best = v; }
+            }
+          }
+          if (best) video = best;
+        }
+        if (!video) videoState = 'no-video';
+        else if (video.readyState < 2 || video.videoWidth === 0) videoState = 'video-not-ready';
+        else if (video.paused) videoState = 'video-paused';
+        else videoState = 'video-ok';
         if (video && video.readyState >= 2 && video.videoWidth > 0 && !busy) {
-          busy = true;
+          busy = true; lastSendAt = Date.now(); framesSent++;
           try {
             hands.send({ image: video }).catch(function () { busy = false; });
           } catch (e) { busy = false; }

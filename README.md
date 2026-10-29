@@ -1,4 +1,7 @@
-# Thanos Snap for Google Meet — v4.0.0
+# Thanos Snap for Google Meet — v4.1.0
+
+> **v4.1.0 fix:** PJ's v4 test showed 'Hand not seen' the whole time, so the salute never fired. v4.1.0 adds a pixel forehead-cover fallback in the MAIN script (no hand model, no WASM): salute to your forehead, hold still, the green cover bar must pass 28 for 0.7s, then you vanish. MediaPipe is kept with diagnostics, a busy-timeout, confidence 0.4, and fallback to Meet's tile video.
+
 
 > **v4.0.0:** Forehead touch is now the main trigger, as in PJ's 29 Oct video: raise a hand to your forehead and hold still ~0.7s — you vanish, background stays; do it again — you return. Snap (visual + audio) is kept as backup. Trigger mode is selectable in the panel: Both / Forehead only / Snap only.
 

@@ -1,4 +1,13 @@
-/* Thanos Snap for Google Meet — v4.0.0
+/* Thanos Snap for Google Meet — v4.1.0
+ * v4.1.0 FIX for PJ's v4 test ("nothing happened", panel stuck on
+ * "Hand not seen"): MediaPipe never reported a hand at all, and his
+ * salute pose is an edge-on hand flat on the forehead, which a palm
+ * detector often misses entirely. So v4.1.0 adds a MAIN-world pixel
+ * forehead-cover fallback that needs no hand model and no WASM: it
+ * watches how much the top-centre forehead zone of the live video
+ * changes and triggers on a sustained cover (>=0.7s). MediaPipe is
+ * kept, with diagnostics, a busy-timeout, lower confidence (0.4) and
+ * a fallback to Meet's own tile video.
  * v4: FOREHEAD TOUCH is now the preferred trigger (see thanos-hand.js):
  * raise hand to forehead, hold ~0.7s, vanish; do it again, return.
  * Snap (visual + audio) is kept as backup. Trigger mode is selectable
@@ -102,6 +111,7 @@
   var hookEl = null;
   var personBox = null; // {x,y,w,h} in canvas coords, from FaceDetector
   var visualEl = null, audioEl = null, handSeen = false;
+  var coverEl = null, coverFillEl = null;
   var personEl = null, meterEl = null;
   var faceDetector = null, faceAvailable = false;
   var bgCanvas = document.createElement('canvas');
@@ -304,7 +314,7 @@
     header.style.alignItems = 'center'; header.style.marginBottom = '6px';
     header.style.cursor = 'move';
     var titleEl = document.createElement('b');
-    titleEl.textContent = '✨ Thanos Snap v4.0.0  ⠿ drag me';
+    titleEl.textContent = '✨ Thanos Snap v4.1.0  ⠿ drag me';
     header.appendChild(titleEl);
     var minBtn = document.createElement('button');
     minBtn.textContent = '–';
@@ -341,6 +351,17 @@
     visualEl.textContent = 'Hand tracking loading… (visual snap, no sound needed)';
     visualEl.style.fontSize = '11px'; visualEl.style.color = '#c9a7ff'; visualEl.style.marginTop = '2px';
     bodyDiv.appendChild(visualEl);
+    coverEl = document.createElement('div');
+    coverEl.textContent = 'Forehead cover: waiting for camera…';
+    coverEl.style.fontSize = '11px'; coverEl.style.color = '#7CFC9A'; coverEl.style.marginTop = '2px';
+    bodyDiv.appendChild(coverEl);
+    var coverBox = document.createElement('div');
+    coverBox.style.height = '8px'; coverBox.style.background = 'rgba(255,255,255,0.15)';
+    coverBox.style.borderRadius = '4px'; coverBox.style.overflow = 'hidden'; coverBox.style.marginTop = '2px';
+    coverFillEl = document.createElement('div');
+    coverFillEl.style.height = '100%'; coverFillEl.style.width = '0%'; coverFillEl.style.background = '#7CFC9A';
+    coverBox.appendChild(coverFillEl);
+    bodyDiv.appendChild(coverBox);
     audioEl = document.createElement('div');
     audioEl.textContent = 'Audio snap: backup only';
     audioEl.style.fontSize = '11px'; audioEl.style.color = '#ccc'; audioEl.style.marginTop = '2px';
@@ -394,7 +415,7 @@
     testBtn.style.cursor = 'pointer'; testBtn.style.fontSize = '12px';
     bodyDiv.appendChild(testBtn);
     var footNote = document.createElement('div');
-    footNote.textContent = 'How it works: FOREHEAD TOUCH is the main trigger now — raise a hand to your forehead and hold still ~0.7s, you vanish; do it again, you return. Snap still works as backup. The Test button is only for checking the animation without a gesture. Drag the title bar to move this panel. X hides it; the small ✨ button brings it back.';
+    footNote.textContent = 'How it works (v4.1.0): SALUTE to your forehead and HOLD still — the green Forehead cover bar must pass 28 and stay for 0.7s, then you vanish; salute again to return. This works even if Hand tracking says not seen, because it watches the video pixels, not a hand model. Snap still works as backup. The Test button is only for checking the animation.';
     var modeLabel = document.createElement('div');
     modeLabel.textContent = 'Trigger';
     modeLabel.style.margin = '8px 0 2px';
@@ -488,7 +509,7 @@
     if (!settings.enabled) return;
     // Trigger-mode filter: 'both' allows everything, otherwise only
     // the selected trigger (Test button always allowed).
-    if (settings.triggerMode === 'forehead' && source !== 'forehead touch' && source !== 'test button' && source !== 'manual') return;
+    if (settings.triggerMode === 'forehead' && source !== 'forehead touch' && source !== 'forehead cover' && source !== 'test button' && source !== 'manual') return;
     if (settings.triggerMode === 'snap' && source !== 'visual snap' && source !== 'audio snap' && source !== 'test button' && source !== 'manual') return;
     var now = Date.now();
     if (now - lastSnapAt < 1500) return; // debounce + animation guard
@@ -663,9 +684,68 @@
       else if (!d.ready) visualEl.textContent = 'Hand tracking loading…';
       else if (d.forehead) visualEl.textContent = 'Forehead hold: ' + Math.round(d.holdMs / 100) / 10 + 's / 0.7s — hold still to vanish';
       else if (d.seen) visualEl.textContent = 'Hand seen — raise it to your forehead and hold, or snap (thumb-middle: ' + d.ratio + ')';
-      else visualEl.textContent = 'Hand not seen — raise your hand into frame';
+      else visualEl.textContent = 'Hand not seen — tracker: ' + (d.video || '?') + ', frames ' + (d.frames || 0) + ', results ' + (d.results || 0) + ' — salute still works via Forehead cover below';
     }
   });
+
+
+  // ---------- forehead-cover fallback (v4.1.0, MAIN world, no WASM) ----------
+  // Samples the live source video at 96x54, keeps a slow baseline of the
+  // frame without a hand, and measures change in the top-centre forehead
+  // zone (x 0.25-0.75, y 0.05-0.50). A hand held on the forehead changes
+  // that zone a lot for as long as it stays there. Trigger: diff > 28
+  // continuously for >= 700ms. Re-arm: diff < 18 for >= 500ms.
+  var coverCanvas = document.createElement('canvas'); coverCanvas.width = 96; coverCanvas.height = 54;
+  var coverCtx = null;
+  try { coverCtx = coverCanvas.getContext('2d', { willReadFrequently: true }); } catch (e) { coverCtx = coverCanvas.getContext('2d'); }
+  var coverBaseline = null, coverHoldMs = 0, coverLowMs = 0, coverArmed = true, coverDiff = 0, coverLastTrigger = 0;
+  (function coverTick() {
+    setTimeout(function () {
+      try {
+        if (videoEl.readyState >= 2 && videoEl.videoWidth > 0 && coverCtx) {
+          coverCtx.drawImage(videoEl, 0, 0, 96, 54);
+          var cdata = coverCtx.getImageData(0, 0, 96, 54).data;
+          if (!coverBaseline) {
+            coverBaseline = [];
+            for (var bi = 0; bi < cdata.length; bi += 4) { coverBaseline[bi] = cdata[bi]; coverBaseline[bi + 1] = cdata[bi + 1]; coverBaseline[bi + 2] = cdata[bi + 2]; }
+          }
+          var sum = 0, cnt = 0;
+          for (var cy = 3; cy < 27; cy++) {
+            for (var cx = 24; cx < 72; cx++) {
+              var cidx = (cy * 96 + cx) * 4;
+              sum += (Math.abs(cdata[cidx] - coverBaseline[cidx]) + Math.abs(cdata[cidx + 1] - coverBaseline[cidx + 1]) + Math.abs(cdata[cidx + 2] - coverBaseline[cidx + 2])) / 3;
+              cnt++;
+            }
+          }
+          coverDiff = cnt ? sum / cnt : 0;
+          var cnow = Date.now();
+          if (coverDiff > 28) {
+            coverHoldMs += 100; coverLowMs = 0;
+            if (coverArmed && coverHoldMs >= 700 && cnow - coverLastTrigger > 1500) {
+              coverLastTrigger = cnow; coverArmed = false; coverHoldMs = 0;
+              onSnapDetected('forehead cover');
+            }
+          } else {
+            coverHoldMs = 0;
+            if (coverDiff < 18) {
+              coverLowMs += 100;
+              if (coverLowMs >= 500) coverArmed = true;
+              for (var bj = 0; bj < cdata.length; bj += 4) {
+                coverBaseline[bj] = Math.round(coverBaseline[bj] * 0.95 + cdata[bj] * 0.05);
+                coverBaseline[bj + 1] = Math.round(coverBaseline[bj + 1] * 0.95 + cdata[bj + 1] * 0.05);
+                coverBaseline[bj + 2] = Math.round(coverBaseline[bj + 2] * 0.95 + cdata[bj + 2] * 0.05);
+              }
+            }
+          }
+          if (coverEl) coverEl.textContent = 'Forehead cover: ' + Math.round(coverDiff) + ' (need >28 for 0.7s)' + (coverDiff > 28 ? ' — holding ' + (Math.round(coverHoldMs / 100) / 10) + 's' : '');
+          if (coverFillEl) coverFillEl.style.width = Math.min(100, Math.round(coverDiff * 100 / 50)) + '%';
+        } else if (coverEl) {
+          coverEl.textContent = 'Forehead cover: waiting for camera…';
+        }
+      } catch (e) {}
+      coverTick();
+    }, 100);
+  })();
 
   // ---------- intercept getUserMedia ----------
   function installInterceptor() {
@@ -749,5 +829,5 @@
     status: function () { return { mode: mode, hooked: hooked, snaps: snapCount, sensitivity: settings.sensitivity }; },
     toggle: function () { settings.enabled = !settings.enabled; saveSettings(); return settings.enabled; }
   };
-  console.log('[Thanos Snap v4.0.0] loaded — interceptor installed, waiting for camera.');
+  console.log('[Thanos Snap v4.1.0] loaded — interceptor installed, waiting for camera.');
 })();
