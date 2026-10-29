@@ -1,4 +1,10 @@
-/* Thanos Hand Tracker — ISOLATED world content script (v3.0.0)
+/* Thanos Hand Tracker — ISOLATED world content script (v4.0.0)
+ * v4 adds FOREHEAD TOUCH: raise a hand to your forehead, hold it there,
+ * you vanish (background only); raise it again, hold, you come back.
+ * Detection: palm centre (avg of landmarks 0,5,9,13,17) in upper-centre
+ * (y < 0.42, x 0.30-0.70), hand large enough (scale > 0.12), held almost
+ * still (< 0.08 movement) for >= 700ms. After a trigger it will NOT fire
+ * again until the hand leaves the forehead region.
  * Runs separately from the MAIN-world thanos.js so Meet's page CSP /
  * Trusted Types cannot block it, and so chrome.runtime.getURL works.
  * It finds the hidden source video element that MAIN appends to the
@@ -28,6 +34,8 @@
   var hands = null, ready = false, busy = false;
   var history = []; // {t, ratio}
   var lastSnapAt = 0, lastStatusAt = 0;
+  var foreheadHist = []; // {t, x, y}
+  var foreheadArmed = true, lastForeheadAt = 0;
 
   function dist(a, b) {
     var dx = a.x - b.x, dy = a.y - b.y;
@@ -39,9 +47,31 @@
     var lm = results && results.multiHandLandmarks && results.multiHandLandmarks[0];
     var now = Date.now();
     if (!lm) {
-      history = [];
-      if (now - lastStatusAt > 1000) { lastStatusAt = now; emit('thanos-hand-status', { seen: false, ratio: null, ready: ready }); }
+      history = []; foreheadHist = []; foreheadArmed = true;
+      if (now - lastStatusAt > 1000) { lastStatusAt = now; emit('thanos-hand-status', { seen: false, ratio: null, ready: ready, forehead: false, holdMs: 0 }); }
       return;
+    }
+    var palmX = (lm[0].x + lm[5].x + lm[9].x + lm[13].x + lm[17].x) / 5;
+    var palmY = (lm[0].y + lm[5].y + lm[9].y + lm[13].y + lm[17].y) / 5;
+    var palmScale = dist(lm[0], lm[9]);
+    var inForehead = palmY < 0.42 && palmX > 0.30 && palmX < 0.70 && palmScale > 0.12;
+    var holdMs = 0;
+    if (inForehead) {
+      foreheadHist.push({ t: now, x: palmX, y: palmY });
+      while (foreheadHist.length && now - foreheadHist[0].t > 900) foreheadHist.shift();
+      holdMs = foreheadHist.length ? now - foreheadHist[0].t : 0;
+      var maxMove = 0;
+      for (var fi = 0; fi < foreheadHist.length; fi++) {
+        var dxf = foreheadHist[fi].x - foreheadHist[0].x, dyf = foreheadHist[fi].y - foreheadHist[0].y;
+        var ddf = Math.sqrt(dxf * dxf + dyf * dyf); if (ddf > maxMove) maxMove = ddf;
+      }
+      if (foreheadArmed && holdMs >= 700 && maxMove < 0.08 && now - lastForeheadAt > 1500) {
+        lastForeheadAt = now; foreheadArmed = false; foreheadHist = [];
+        emit('thanos-forehead-touch', { at: now, holdMs: holdMs });
+      }
+    } else {
+      if (foreheadHist.length) foreheadArmed = true;
+      foreheadHist = []; holdMs = 0;
     }
     var scale = dist(lm[0], lm[9]) || 0.2;
     var ratio = dist(lm[4], lm[12]) / scale;
@@ -50,7 +80,7 @@
     while (history.length && now - history[0].t > 500) history.shift();
     if (now - lastStatusAt > 800) {
       lastStatusAt = now;
-      emit('thanos-hand-status', { seen: true, ratio: Math.round(ratio * 100) / 100, ready: ready });
+      emit('thanos-hand-status', { seen: true, ratio: Math.round(ratio * 100) / 100, ready: ready, forehead: inForehead, holdMs: holdMs });
     }
     if (!handRaised) return;
     if (now - lastSnapAt < 1500) return;

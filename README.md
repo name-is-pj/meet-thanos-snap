@@ -1,4 +1,7 @@
-# Thanos Snap for Google Meet — v3.0.0
+# Thanos Snap for Google Meet — v4.0.0
+
+> **v4.0.0:** Forehead touch is now the main trigger, as in PJ's 29 Oct video: raise a hand to your forehead and hold still ~0.7s — you vanish, background stays; do it again — you return. Snap (visual + audio) is kept as backup. Trigger mode is selectable in the panel: Both / Forehead only / Snap only.
+
 
 > **v3.0.0:** Visual snap via MediaPipe Hands (bundled locally, no CDN). It watches the video for the thumb+middle finger flick — pressed together, then apart fast — so a quiet snap near a far laptop mic still triggers. Audio snap is kept as backup only. Panel shows hand status live.
 

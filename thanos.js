@@ -1,4 +1,8 @@
-/* Thanos Snap for Google Meet — v3.0.0
+/* Thanos Snap for Google Meet — v4.0.0
+ * v4: FOREHEAD TOUCH is now the preferred trigger (see thanos-hand.js):
+ * raise hand to forehead, hold ~0.7s, vanish; do it again, return.
+ * Snap (visual + audio) is kept as backup. Trigger mode is selectable
+ * in the panel: Both (default), Forehead only, Snap only.
  * v3.0.0 — VISUAL SNAP, because audio snap kept missing in PJ's tests:
  * his laptop mic is far from his fingers, the snap click is quiet, and
  * screen recordings are silent so we could never hear it anyway.
@@ -76,11 +80,12 @@
   window.__thanosSnapInstalled = true;
 
   var SETTINGS_KEY = 'thanosSnapSettings';
-  var settings = { enabled: true, sensitivity: 0.80, dustMs: 1400 };
+  var settings = { enabled: true, sensitivity: 0.80, dustMs: 1400, triggerMode: 'both' };
   try {
     var saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
     if (typeof saved.enabled === 'boolean') settings.enabled = saved.enabled;
     if (typeof saved.sensitivity === 'number') settings.sensitivity = saved.sensitivity;
+    if (typeof saved.triggerMode === 'string') settings.triggerMode = saved.triggerMode;
   } catch (e) { /* keep defaults */ }
 
   function saveSettings() {
@@ -299,7 +304,7 @@
     header.style.alignItems = 'center'; header.style.marginBottom = '6px';
     header.style.cursor = 'move';
     var titleEl = document.createElement('b');
-    titleEl.textContent = '✨ Thanos Snap v3.0.0  ⠿ drag me';
+    titleEl.textContent = '✨ Thanos Snap v4.0.0  ⠿ drag me';
     header.appendChild(titleEl);
     var minBtn = document.createElement('button');
     minBtn.textContent = '–';
@@ -389,7 +394,20 @@
     testBtn.style.cursor = 'pointer'; testBtn.style.fontSize = '12px';
     bodyDiv.appendChild(testBtn);
     var footNote = document.createElement('div');
-    footNote.textContent = 'How it works: just snap — detection is automatic, no click needed. The Test button is only for checking the animation without snapping. Drag the title bar to move this panel. X hides it; the small ✨ button brings it back. Snap again while dusted to come back.';
+    footNote.textContent = 'How it works: FOREHEAD TOUCH is the main trigger now — raise a hand to your forehead and hold still ~0.7s, you vanish; do it again, you return. Snap still works as backup. The Test button is only for checking the animation without a gesture. Drag the title bar to move this panel. X hides it; the small ✨ button brings it back.';
+    var modeLabel = document.createElement('div');
+    modeLabel.textContent = 'Trigger';
+    modeLabel.style.margin = '8px 0 2px';
+    bodyDiv.appendChild(modeLabel);
+    var modeSel = document.createElement('select');
+    modeSel.style.width = '100%'; modeSel.style.padding = '6px'; modeSel.style.borderRadius = '8px';
+    var optBoth = document.createElement('option'); optBoth.value = 'both'; optBoth.textContent = 'Both: forehead + snap';
+    var optFore = document.createElement('option'); optFore.value = 'forehead'; optFore.textContent = 'Forehead touch only';
+    var optSnap = document.createElement('option'); optSnap.value = 'snap'; optSnap.textContent = 'Snap only';
+    modeSel.appendChild(optBoth); modeSel.appendChild(optFore); modeSel.appendChild(optSnap);
+    modeSel.value = settings.triggerMode || 'both';
+    modeSel.addEventListener('change', function () { settings.triggerMode = modeSel.value; saveSettings(); });
+    bodyDiv.appendChild(modeSel);
     footNote.style.fontSize = '11px'; footNote.style.color = '#ccc'; footNote.style.marginTop = '8px';
     bodyDiv.appendChild(footNote);
     document.body.appendChild(panel);
@@ -441,6 +459,12 @@
 
   // ---------- snap transitions ----------
   function startDust() {
+    if (!personBox && canvas.width > 0) {
+      // No FaceDetector box? Use a central box so the sides of your
+      // background stay visible, like in PJ's forehead video, instead
+      // of the whole frame going black.
+      personBox = { x: canvas.width * 0.22, y: 0, w: canvas.width * 0.56, h: canvas.height };
+    }
     takeSnapshot();
     makeParticles(false);
     mode = 'dusting';
@@ -450,6 +474,9 @@
     showToast('💨 Snapped — you turned to dust and muted');
   }
   function startReturn() {
+    if (!personBox && canvas.width > 0) {
+      personBox = { x: canvas.width * 0.22, y: 0, w: canvas.width * 0.56, h: canvas.height };
+    }
     takeSnapshot();
     makeParticles(true);
     mode = 'returning';
@@ -459,6 +486,10 @@
   }
   function onSnapDetected(source) {
     if (!settings.enabled) return;
+    // Trigger-mode filter: 'both' allows everything, otherwise only
+    // the selected trigger (Test button always allowed).
+    if (settings.triggerMode === 'forehead' && source !== 'forehead touch' && source !== 'test button' && source !== 'manual') return;
+    if (settings.triggerMode === 'snap' && source !== 'visual snap' && source !== 'audio snap' && source !== 'test button' && source !== 'manual') return;
     var now = Date.now();
     if (now - lastSnapAt < 1500) return; // debounce + animation guard
     lastSnapAt = now;
@@ -621,14 +652,18 @@
   window.addEventListener('thanos-visual-snap', function () {
     onSnapDetected('visual snap');
   });
+  window.addEventListener('thanos-forehead-touch', function () {
+    onSnapDetected('forehead touch');
+  });
   window.addEventListener('thanos-hand-status', function (ev) {
     var d = (ev && ev.detail) || {};
     handSeen = !!d.seen;
     if (visualEl) {
       if (d.error) visualEl.textContent = 'Hand tracking error: ' + d.error;
       else if (!d.ready) visualEl.textContent = 'Hand tracking loading…';
-      else if (d.seen) visualEl.textContent = 'Hand seen in video — snap flick will trigger (thumb-middle: ' + d.ratio + ')';
-      else visualEl.textContent = 'Hand not seen — raise your hand into frame, then snap';
+      else if (d.forehead) visualEl.textContent = 'Forehead hold: ' + Math.round(d.holdMs / 100) / 10 + 's / 0.7s — hold still to vanish';
+      else if (d.seen) visualEl.textContent = 'Hand seen — raise it to your forehead and hold, or snap (thumb-middle: ' + d.ratio + ')';
+      else visualEl.textContent = 'Hand not seen — raise your hand into frame';
     }
   });
 
@@ -714,5 +749,5 @@
     status: function () { return { mode: mode, hooked: hooked, snaps: snapCount, sensitivity: settings.sensitivity }; },
     toggle: function () { settings.enabled = !settings.enabled; saveSettings(); return settings.enabled; }
   };
-  console.log('[Thanos Snap v3.0.0] loaded — interceptor installed, waiting for camera.');
+  console.log('[Thanos Snap v4.0.0] loaded — interceptor installed, waiting for camera.');
 })();
